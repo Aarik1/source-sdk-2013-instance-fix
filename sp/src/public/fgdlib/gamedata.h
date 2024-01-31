@@ -19,6 +19,7 @@
 #include "InputOutput.h"
 #include "UtlString.h"
 #include "utlvector.h"
+#include "utlmap.h"
 
 
 class MDkeyvalue;
@@ -75,6 +76,9 @@ class GameData
 
 		GDclass *ClassForName(const char *pszName, int *piIndex = NULL);
 
+		void BeginInstancing(int nPass);
+		void BeginMapInstance();
+
 		void ClearData();
 
 		inline int GetMaxMapCoord(void);
@@ -86,6 +90,7 @@ class GameData
 		GDclass *BeginInstanceRemap( const char *pszClassName, const char *pszInstancePrefix, Vector &Origin, QAngle &Angle );
 		bool	RemapKeyValue( const char *pszKey, const char *pszInValue, char *pszOutValue, TNameFixup NameFixup );
 		bool	RemapNameField( const char *pszInValue, char *pszOutValue, TNameFixup NameFixup );
+		bool	RemapInstanceField(const char* pszInValue, char* pszOutValue, TNameFixup NameFixup);
 		bool	LoadFGDMaterialExclusions( TokenReader &tr );
 		bool	LoadFGDAutoVisGroups( TokenReader &tr );
 		
@@ -104,11 +109,14 @@ class GameData
 		int m_nMaxMapCoord;
 
 		// Instance Remapping
+		int					m_nRemapStage;
 		Vector		m_InstanceOrigin;			// the origin offset of the instance
 		QAngle		m_InstanceAngle;			// the rotation of the the instance
 		matrix3x4_t	m_InstanceMat;				// matrix of the origin and rotation of rendering
 		char		m_InstancePrefix[ 128 ];	// the prefix used for the instance name remapping
 		GDclass		*m_InstanceClass;			// the entity class that is being remapped
+		int					m_nNextNodeID;
+		CUtlMap< int, int >	m_NodeRemap;
 };
 
 

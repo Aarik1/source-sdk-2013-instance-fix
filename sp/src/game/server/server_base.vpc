@@ -665,6 +665,9 @@ $Project
 		$File	"$SRCDIR\public\haptics\haptic_msgs.cpp"
 		$File	"$SRCDIR\public\haptics\haptic_utils.cpp"	[$WIN32]
 
+		// func_instance_io_proxy
+		$File	"func_instance_io_proxy.cpp"
+
 		// Not using precompiled header cbase.h
 
 		$File	"$SRCDIR\public\bone_setup.cpp"					\
