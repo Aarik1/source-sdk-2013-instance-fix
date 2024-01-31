@@ -20,6 +20,9 @@
 #include "utilmatlib.h"
 #include "ChunkFile.h"
 
+// Need gamedata
+#include "fgdlib/gamedata.h"
+
 #ifdef WIN32
 #pragma warning( disable: 4706 )
 #endif
@@ -283,12 +286,15 @@ public:
 
 	void				CheckForInstances( const char *pszFileName );
 	void				MergeInstance( entity_t *pInstanceEntity, CMapFile *Instance );
+	void				PreLoadInstances( GameData *pGD );
+	void				PostLoadInstances();
 	void				MergePlanes( entity_t *pInstanceEntity, CMapFile *Instance, Vector &InstanceOrigin, QAngle &InstanceAngle, matrix3x4_t &InstanceMatrix );
 	void				MergeBrushes( entity_t *pInstanceEntity, CMapFile *Instance, Vector &InstanceOrigin, QAngle &InstanceAngle, matrix3x4_t &InstanceMatrix );
 	void				MergeBrushSides( entity_t *pInstanceEntity, CMapFile *Instance, Vector &InstanceOrigin, QAngle &InstanceAngle, matrix3x4_t &InstanceMatrix );
 	void				ReplaceInstancePair( epair_t *pPair, entity_t *pInstanceEntity );
 	void				MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vector &InstanceOrigin, QAngle &InstanceAngle, matrix3x4_t &InstanceMatrix );
 	void				MergeOverlays( entity_t *pInstanceEntity, CMapFile *Instance, Vector &InstanceOrigin, QAngle &InstanceAngle, matrix3x4_t &InstanceMatrix );
+	void				MergeIOProxy(entity_t* pInstanceEntity, CMapFile* Instance, Vector& InstanceOrigin, QAngle& InstanceAngle, matrix3x4_t& InstanceMatrix);
 
 	static int	m_InstanceCount;
 	static int	c_areaportals;

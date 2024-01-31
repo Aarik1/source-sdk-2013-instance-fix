@@ -238,7 +238,8 @@ bool GDGetTokenDynamic(TokenReader &tr, char **ppszStore, trtoken_t ttexpecting,
 //-----------------------------------------------------------------------------
 // Purpose: Constructor.
 //-----------------------------------------------------------------------------
-GameData::GameData(void)
+GameData::GameData(void) :
+	m_NodeRemap( DefLessFunc( int ) )
 {
 	m_nMaxMapCoord = 8192;
 	m_nMinMapCoord = -8192;
@@ -516,6 +517,25 @@ GDclass *GameData::ClassForName(const char *pszName, int *piIndex)
 	return NULL;
 }
 
+void GameData::BeginInstancing(int nPass)
+{
+	m_nRemapStage = nPass;
+
+	switch (m_nRemapStage)
+	{
+	case 2:
+		m_nNextNodeID = 1;
+		break;
+	}
+}
+
+
+void GameData::BeginMapInstance()
+{
+	m_NodeRemap.RemoveAll();
+}
+
+
 
 // These are 'standard' keys that every entity uses, but they aren't specified that way in the .fgd
 static const char *RequiredKeys[] =
@@ -586,6 +606,9 @@ enum tRemapOperation
 	REMAP_POSITION,
 	REMAP_ANGLE,
 	REMAP_ANGLE_NEGATIVE_PITCH,
+	REMAP_NODE,
+	REMAP_INSTANCE_VARIABLE
+
 };
 
 
@@ -649,6 +672,10 @@ bool GameData::RemapKeyValue( const char *pszKey, const char *pszInValue, char *
 	switch( RemapOperation[ KVRemapIndex ] )
 	{
 		case REMAP_NAME:
+			if ( m_nRemapStage != 1 )
+			{
+				return false;
+			}
 			if ( KVType != ivInstanceVariable )
 			{
 				RemapNameField( pszInValue, pszOutValue, NameFixup );
@@ -657,6 +684,10 @@ bool GameData::RemapKeyValue( const char *pszKey, const char *pszInValue, char *
 
 		case REMAP_POSITION:
 			{
+				if (m_nRemapStage != 1)
+				{
+					return false;
+				}
 				Vector	inPoint( 0.0f, 0.0f, 0.0f ), outPoint;
 
 				sscanf ( pszInValue, "%f %f %f", &inPoint.x, &inPoint.y, &inPoint.z );
@@ -666,6 +697,10 @@ bool GameData::RemapKeyValue( const char *pszKey, const char *pszInValue, char *
 			break;
 			
 		case REMAP_ANGLE:
+			if (m_nRemapStage != 1)
+			{
+				return false;
+			}
 			if ( m_InstanceAngle.x != 0.0f || m_InstanceAngle.y != 0.0f || m_InstanceAngle.z != 0.0f )
 			{
 				QAngle		inAngles( 0.0f, 0.0f, 0.0f ), outAngles;
@@ -682,6 +717,10 @@ bool GameData::RemapKeyValue( const char *pszKey, const char *pszInValue, char *
 			break;
 
 		case REMAP_ANGLE_NEGATIVE_PITCH:
+			if (m_nRemapStage != 1)
+			{
+				return false;
+			}
 			if ( m_InstanceAngle.x != 0.0f || m_InstanceAngle.y != 0.0f || m_InstanceAngle.z != 0.0f )
 			{
 				QAngle		inAngles( 0.0f, 0.0f, 0.0f ), outAngles;
@@ -696,6 +735,33 @@ bool GameData::RemapKeyValue( const char *pszKey, const char *pszInValue, char *
 
 				sprintf( pszOutValue, "%g", -outAngles.x );	// just the pitch
 			}
+			break;
+
+		case REMAP_NODE:
+		{
+			int	nFromNode = atoi(pszInValue);
+			int nToNode;
+			int nIndex = m_NodeRemap.Find(nFromNode);
+			if (m_NodeRemap.IsValidIndex(nIndex) == false)
+			{
+				nToNode = m_nNextNodeID;
+				m_nNextNodeID++;
+				m_NodeRemap.Insert(atoi(pszInValue), nToNode);
+			}
+			else
+			{
+				nToNode = m_NodeRemap.Element(nIndex);
+			}
+			sprintf(pszOutValue, "%d", nToNode);
+		}
+		break;
+
+		case REMAP_INSTANCE_VARIABLE:
+			if (m_nRemapStage != 1)
+			{
+				return false;
+			}
+			RemapInstanceField(pszInValue, pszOutValue, NameFixup);
 			break;
 	}
 
@@ -732,6 +798,43 @@ bool GameData::RemapNameField( const char *pszInValue, char *pszOutValue, TNameF
 	return ( strcmpi( pszInValue, pszOutValue ) != 0 );
 }
 
+//-----------------------------------------------------------------------------
+// Purpose: this function will attempt to remap a instance field.
+// Input  : pszInvalue - the original value
+// Output : returns true if the value changed
+//			pszOutValue - the new value if changed
+//-----------------------------------------------------------------------------
+bool GameData::RemapInstanceField( const char *pszInValue, char *pszOutValue, TNameFixup NameFixup )
+{
+	strcpy( pszOutValue, pszInValue );
+
+	const char *pszInEdit = strchr( pszInValue, ' ' );
+	char *pchOutEdit = strchr( pszOutValue, ' ' );
+
+	if ( pszInEdit && pchOutEdit )
+	{
+		pszInEdit++;
+		pchOutEdit++;
+
+		if ( pszInEdit[ 0 ] && pszInEdit[ 0 ] != '@' && pszInEdit[ 0 ] != '!' && 
+			 pszInEdit[ 0 ] != '-' && pszInEdit[ 0 ] != '.' && 
+			 !( pszInEdit[ 0 ] >= '0' && pszInEdit[ 0 ] <= '9' ) )
+		{	// ! or @ at the start of a value or a number means it is global and should not be remapped
+			switch( NameFixup )
+			{
+			case NAME_FIXUP_PREFIX:
+				sprintf( pchOutEdit, "%s-%s", m_InstancePrefix, pszInEdit );
+				break;
+
+			case NAME_FIXUP_POSTFIX:
+				sprintf( pchOutEdit, "%s-%s", pszInEdit, m_InstancePrefix );
+				break;
+			}
+		}
+	}
+
+	return ( strcmpi( pszInValue, pszOutValue ) != 0 );
+}
 
 //-----------------------------------------------------------------------------
 // Purpose: Gathers any FGD-defined material directory exclusions

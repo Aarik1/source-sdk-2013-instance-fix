@@ -3069,7 +3069,7 @@ void PrintEntity (entity_t *ent)
 
 }
 
-void SetKeyValue(entity_t *ent, const char *key, const char *value)
+epair_t* SetKeyValue(entity_t *ent, const char *key, const char *value)
 {
 	epair_t	*ep;
 	
@@ -3078,13 +3078,39 @@ void SetKeyValue(entity_t *ent, const char *key, const char *value)
 		{
 			free (ep->value);
 			ep->value = copystring(value);
-			return;
+			return ep;
 		}
 	ep = (epair_t*)malloc (sizeof(*ep));
 	ep->next = ent->epairs;
 	ent->epairs = ep;
 	ep->key = copystring(key);
 	ep->value = copystring(value);
+	return ep;
+}
+
+epair_t* SetKeyValue( entity_t *ent, const char *key, const char *value, bool bAllowDuplicates )
+{
+	epair_t	*ep;
+	
+	if ( bAllowDuplicates == false )
+	{
+		for (ep=ent->epairs ; ep ; ep=ep->next)
+		{
+			if (!Q_stricmp (ep->key, key) )
+			{
+				free (ep->value);
+				ep->value = copystring(value);
+				return ep;
+			}
+		}
+	}
+	ep = (epair_t*)malloc (sizeof(*ep));
+	ep->next = ent->epairs;
+	ent->epairs = ep;
+	ep->key = copystring(key);
+	ep->value = copystring(value);
+
+	return ep;
 }
 
 char 	*ValueForKey (entity_t *ent, char *key)

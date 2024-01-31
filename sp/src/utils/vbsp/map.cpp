@@ -20,6 +20,8 @@
 #include "VmfImport.h"
 #endif // VSVMFIO
 
+// Needed for fixup
+#include "instancing_helper.h"
 
 // undefine to make plane finding use linear sort
 #define	USE_HASHING
@@ -1963,87 +1965,110 @@ bool CMapFile::DeterminePath( const char *pszBaseFileName, const char *pszInstan
 }
 
 
+
 //-----------------------------------------------------------------------------
 // Purpose: this function will check the main map for any func_instances.  It will
 //			also attempt to load in the gamedata file for instancing remapping help.
 // Input  : none
 // Output : none
 //-----------------------------------------------------------------------------
-void CMapFile::CheckForInstances( const char *pszFileName )
+void CMapFile::CheckForInstances(const char* pszFileName)
 {
-	if ( this != g_MainMap )
+	if (this != g_MainMap)
 	{	// all sub-instances will be appended to the main map master list as they are read in
 		// so the main loop below will naturally get to the appended ones.
 		return;
 	}
 
-	char	GameInfoPath[ MAX_PATH ];
+	char	GameInfoPath[MAX_PATH];
 
-	g_pFullFileSystem->RelativePathToFullPath( "gameinfo.txt", "MOD", GameInfoPath, sizeof( GameInfoPath ) );
-	KeyValues *GameInfoKV = ReadKeyValuesFile( GameInfoPath );
-	if ( !GameInfoKV )
+	g_pFullFileSystem->RelativePathToFullPath("gameinfo.txt", "MOD", GameInfoPath, sizeof(GameInfoPath));
+	KeyValues* GameInfoKV = ReadKeyValuesFile(GameInfoPath);
+	if (!GameInfoKV)
 	{
-		Msg( "Could not locate gameinfo.txt for Instance Remapping at %s\n", GameInfoPath );
+		Msg("Could not locate gameinfo.txt for Instance Remapping at %s\n", GameInfoPath);
 		return;
 	}
 
-	const char *InstancePath = GameInfoKV->GetString( "InstancePath", NULL );
-	if ( InstancePath )
+	const char* InstancePath = GameInfoKV->GetString("InstancePath", NULL);
+	if (InstancePath)
 	{
-		CMapFile::SetInstancePath( InstancePath );
+		CMapFile::SetInstancePath(InstancePath);
 	}
 
-	const char *GameDataFile = GameInfoKV->GetString( "GameData", NULL );
-	if ( !GameDataFile )
+	const char* GameDataFile = GameInfoKV->GetString("GameData", NULL);
+	if (!GameDataFile)
 	{
-		Msg( "Could not locate 'GameData' key in %s\n", GameInfoPath );
+		Msg("Could not locate 'GameData' key in %s\n", GameInfoPath);
 		return;
 	}
 
-	char	FDGPath[ MAX_PATH ];
-	if ( !g_pFullFileSystem->RelativePathToFullPath( GameDataFile, "EXECUTABLE_PATH", FDGPath, sizeof( FDGPath ) ) )
+	char	FDGPath[MAX_PATH];
+	if (!g_pFullFileSystem->RelativePathToFullPath(GameDataFile, "EXECUTABLE_PATH", FDGPath, sizeof(FDGPath)))
 	{
-		if ( !g_pFullFileSystem->RelativePathToFullPath( GameDataFile, NULL, FDGPath, sizeof( FDGPath ) ) )
+		if (!g_pFullFileSystem->RelativePathToFullPath(GameDataFile, "", FDGPath, sizeof(FDGPath)))
 		{
-			Msg( "Could not locate GameData file %s\n", GameDataFile );
+			Msg("Could not locate GameData file %s\n", GameDataFile);
 		}
 	}
 
-	GD.Load( FDGPath );
+	bool	bFoundInstances = false;
+
+	GD.Load(FDGPath);
+
+	PreLoadInstances(&GD);
+
+	GD.BeginInstancing(1);
 
 	// this list will grow as instances are merged onto it.  sub-instances are merged and 
 	// automatically done in this processing.
-	for ( int i = 0; i < num_entities; i++ )
+	for (int i = 0; i < num_entities; i++)
 	{
-		char *pEntity = ValueForKey( &entities[ i ], "classname" );
-		if ( !strcmp( pEntity, "func_instance" ) )
+		char* pEntity = ValueForKey(&entities[i], "classname");
+		if (!strcmp(pEntity, "func_instance"))
 		{
-			char *pInstanceFile = ValueForKey( &entities[ i ], "file" );
-			if ( pInstanceFile[ 0 ] )
+			char* pInstanceFile = ValueForKey(&entities[i], "file");
+			if (pInstanceFile[0])
 			{
-				char	InstancePath[ MAX_PATH ];
+				char	InstancePath[MAX_PATH];
 				bool	bLoaded = false;
 
-				if ( DeterminePath( pszFileName, pInstanceFile, InstancePath ) )
+				if (CInstancingHelper::ResolveInstancePath(g_pFullFileSystem, pszFileName, pInstanceFile, m_InstancePath, InstancePath, MAX_PATH))
 				{
-					if ( LoadMapFile( InstancePath ) )
+					if (LoadMapFile(InstancePath))
 					{
-						MergeInstance( &entities[ i ], g_LoadingMap );
+						MergeInstance(&entities[i], g_LoadingMap);
 						delete g_LoadingMap;
 						bLoaded = true;
+						bFoundInstances = true;
 					}
 				}
 
-				if ( bLoaded == false )
+				if (bLoaded == false)
 				{
-					Color red( 255, 0, 0, 255 );
+					Color red(255, 0, 0, 255);
 
-					ColorSpewMessage( SPEW_ERROR, &red, "Could not open instance file %s\n", pInstanceFile );
+					ColorSpewMessage(SPEW_ERROR, &red, "Could not open instance file %s\n", pInstanceFile);
 				}
 			}
 
-			entities[ i ].numbrushes = 0;
-			entities[ i ].epairs = NULL;
+			entities[i].numbrushes = 0;
+			entities[i].epairs = NULL;
+		}
+	}
+
+	if (bFoundInstances)
+	{
+		PreLoadInstances(&GD);
+	}
+
+	for (int i = 0; i < num_entities; i++)
+	{
+		char* pEntity = ValueForKey(&entities[i], "classname");
+		if (Q_stricmp(pEntity, "func_instance_parms") == 0)
+		{	// Clear out this entity.
+			entities[i].numbrushes = 0;
+			entities[i].epairs = NULL;
 		}
 	}
 
@@ -2066,6 +2091,8 @@ void CMapFile::MergeInstance( entity_t *pInstanceEntity, CMapFile *Instance )
 
 	m_InstanceCount++;
 
+	GD.BeginMapInstance();
+
 	GetAnglesForKey( pInstanceEntity, "angles", angles );
 	AngleMatrix( angles, OriginOffset, mat );
 
@@ -2077,8 +2104,76 @@ void CMapFile::MergeInstance( entity_t *pInstanceEntity, CMapFile *Instance )
 	MergeBrushSides( pInstanceEntity, Instance, OriginOffset, angles, mat );
 	MergeEntities( pInstanceEntity, Instance, OriginOffset, angles, mat );
 	MergeOverlays( pInstanceEntity, Instance, OriginOffset, angles, mat );
+	MergeIOProxy( pInstanceEntity, Instance, OriginOffset, angles, mat );
 }
 
+void CMapFile::PreLoadInstances( GameData *pGD )
+{
+	char					temp[ 2048 ];
+	// none of these parameters are used in the 2nd pass
+	Vector					InstanceOrigin = vec3_origin;
+	QAngle					InstanceAngle = vec3_angle;
+	char					NameFixup[ 128 ] = "";
+	GameData::TNameFixup	FixupStyle = GameData::NAME_FIXUP_NONE;
+
+	GD.BeginInstancing( 2 );
+
+	for( int i = 0; i < num_entities; i++ )
+	{
+		entity_t	*pEntity = &entities[ i ];
+		char		*pClassName = ValueForKey( pEntity, "classname" );
+		GDclass		*pEntClass = pGD->BeginInstanceRemap( pClassName, NameFixup, InstanceOrigin, InstanceAngle );
+
+		if ( pEntClass )
+		{
+			for( int i = 0; i < pEntClass->GetVariableCount(); i++ )
+			{
+				GDinputvariable *EntVar = pEntClass->GetVariableAt( i );
+				char *pValue = ValueForKey( pEntity, ( char * )EntVar->GetName() );
+				if ( pGD->RemapKeyValue( EntVar->GetName(), pValue, temp, FixupStyle ) )
+				{
+#ifdef MERGE_INSTANCE_DEBUG_INFO
+					Msg( "   %d. Remapped %s: from %s to %s\n", i, EntVar->GetName(), pValue, temp );
+#endif // #ifdef MERGE_INSTANCE_DEBUG_INFO
+					SetKeyValue( pEntity, EntVar->GetName(), temp );
+				}
+				else
+				{
+#ifdef MERGE_INSTANCE_DEBUG_INFO
+					Msg( "   %d. Ignored %s: %s\n", i, EntVar->GetName(), pValue );
+#endif // #ifdef MERGE_INSTANCE_DEBUG_INFO
+				}
+			}
+		}
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: this function will do some overall work after all instances have been
+//			transformed and fixed up
+// Input  : none
+// Output : none
+//-----------------------------------------------------------------------------
+void CMapFile::PostLoadInstances()
+{
+	for (int i = 0; i < num_entities; i++)
+	{
+		entity_t* pEntity = &entities[i];
+		char* pClassName = ValueForKey(pEntity, "classname");
+
+		if (!strcmp("env_cubemap", pClassName))
+		{
+			const char* pSideListStr = ValueForKey(pEntity, "sides");
+			int size;
+			size = IntForKey(pEntity, "cubemapsize");
+			Cubemap_InsertSample(pEntity->origin, size);
+			Cubemap_SaveBrushSides(pSideListStr);
+
+			// clear out this entity
+			pEntity->epairs = NULL;
+		}
+	}
+}
 
 //-----------------------------------------------------------------------------
 // Purpose: this function will merge in the map planes from the instance into
@@ -2314,6 +2409,7 @@ void CMapFile::ReplaceInstancePair( epair_t *pPair, entity_t *pInstanceEntity )
 	}
 }
 
+#define INSTANCE_PARM_KEY "parm"
 
 //-----------------------------------------------------------------------------
 // Purpose: this function will merge in the entities from the instance into
@@ -2330,7 +2426,8 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 	int						max_entity_id = 0;
 	char					temp[ 2048 ];
 	char					NameFixup[ 128 ];
-	entity_t				*WorldspawnEnt = NULL;
+	entity_t				*pWorldspawnEnt = NULL;
+	entity_t				*pParmsEnt = NULL;
 	GameData::TNameFixup	FixupStyle;
 
 	char *pTargetName = ValueForKey( pInstanceEntity, "targetname" );
@@ -2363,6 +2460,109 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 
 	FixupStyle = ( GameData::TNameFixup )( IntForKey( pInstanceEntity, "fixup_style" ) );
 
+	for ( int i = 0; i < Instance->num_entities; i++ )
+	{
+		char *pEntity = ValueForKey( &Instance->entities[ i ], "classname" );
+		if ( Q_stricmp( pEntity, "func_instance_parms" ) == 0 )
+		{
+			pParmsEnt = &Instance->entities[ i ];
+			break;
+		}
+	}
+
+	if ( pParmsEnt != NULL )
+	{
+		int		nReplaceCount = 1;
+
+		for ( epair_t *epParms = pParmsEnt->epairs; epParms != NULL; epParms = epParms->next )
+		{
+			char	ParmTemp[ MAX_KEYVALUE_LEN ];
+			char	*pszParmVariable;
+			char	*pszParmDefaultValue;
+			bool	bFound = false;
+
+			if ( strnicmp( epParms->key, INSTANCE_PARM_KEY, strlen( INSTANCE_PARM_KEY ) ) != 0 )
+			{
+				continue;
+			}
+
+			strcpy( ParmTemp, epParms->value );
+
+			pszParmVariable = ParmTemp;
+
+			char *pPos = strchr( ParmTemp, ' ' );
+			if ( !pPos )
+			{
+				continue;
+			}
+
+			*pPos = 0;
+			pPos++;
+
+			pPos = strchr( pPos, ' ' );
+			if ( !pPos )
+			{
+				continue;
+			}
+
+			pPos++;
+			pszParmDefaultValue = pPos;
+
+			for ( epair_t *epInstance = pInstanceEntity->epairs; epInstance != NULL; epInstance = epInstance->next )
+			{
+				if ( strnicmp( epInstance->key, INSTANCE_VARIABLE_KEY, strlen( INSTANCE_VARIABLE_KEY ) ) == 0 )
+				{
+					char InstanceVariable[ MAX_KEYVALUE_LEN ];
+
+					strcpy( InstanceVariable, epInstance->value );
+
+					char *ValuePos = strchr( InstanceVariable, ' ' );
+					if ( !ValuePos )
+					{
+						continue;
+					}
+					*ValuePos = 0;
+					ValuePos++;
+
+					if ( strcmpi( pszParmVariable, InstanceVariable ) == 0 )
+					{
+						if ( strcmpi( ValuePos, "???" ) == 0 )
+						{
+							epInstance->key[ 0 ] = 0;
+							epInstance->value[ 0 ] = 0;
+						}
+						else
+						{
+							bFound = true;
+						}
+						break;
+					}
+				}
+			}
+
+			if ( !bFound )
+			{
+				char	ParmReplacementKey[ MAX_KEYVALUE_LEN ];
+				char	ParmReplacementValue[ MAX_KEYVALUE_LEN ];
+
+				sprintf( ParmReplacementKey, "%stemp%d", INSTANCE_VARIABLE_KEY, nReplaceCount );
+				nReplaceCount++;
+				sprintf( ParmReplacementValue, "%s %s", pszParmVariable, pszParmDefaultValue );
+
+				epair_t *pNewKV = new epair_t;
+
+				pNewKV->key = new char [ strlen( ParmReplacementKey ) + 1 ];
+				pNewKV->value = new char [ strlen( ParmReplacementValue ) + 1 ];
+
+				strcpy( pNewKV->key, ParmReplacementKey );
+				strcpy( pNewKV->value, ParmReplacementValue );
+
+				pNewKV->next = pInstanceEntity->epairs;
+				pInstanceEntity->epairs = pNewKV;
+			}
+		}
+	}
+
 	for( int i = 0; i < Instance->num_entities; i++ )
 	{
 		entities[ num_entities + i ] = Instance->entities[ i ];
@@ -2383,7 +2583,7 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 		char *pEntity = ValueForKey( entity, "classname" );
 		if ( strcmpi( pEntity, "worldspawn" ) == 0 )
 		{
-			WorldspawnEnt = entity;
+			pWorldspawnEnt = entity;
 		}
 		else
 		{
@@ -2395,6 +2595,23 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 			for ( epair_t *ep = entity->epairs; ep != NULL; ep = ep->next )
 			{
 				ReplaceInstancePair( ep, pInstanceEntity );
+			}
+
+			bool bIsAnglePitchLight = (!strnicmp( pEntity, "light_", 6 ));
+			
+			if ( bIsAnglePitchLight )
+			{
+				// stomp pitch onto angles if pitch is nonzero
+				float flLightPitch = FloatForKey( entity, "pitch" );
+				if ( flLightPitch != 0 )
+				{
+					QAngle angLightAng;
+					GetAnglesForKey( entity, "angles", angLightAng );
+					char buf[128];
+					Q_snprintf( buf, sizeof( buf ), "%.0f %.0f %.0f", -flLightPitch, // negate because bullshit
+						angLightAng[YAW], angLightAng[ROLL] );
+					SetKeyValue( entity, "angles", buf );
+				}
 			}
 
 #ifdef MERGE_INSTANCE_DEBUG_INFO
@@ -2423,6 +2640,16 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 				}
 			}
 
+			if ( bIsAnglePitchLight )
+			{
+				// we remapped angle, so stomp pitch
+				QAngle angLightAng;
+				GetAnglesForKey( entity, "angles", angLightAng );
+				char buf[128];
+				Q_snprintf( buf, sizeof( buf ), "%.0f", -angLightAng[PITCH] );
+				SetKeyValue( entity, "pitch", buf );
+			}
+
 			if ( strcmpi( pEntity, "func_simpleladder" ) == 0 )
 			{	// hate having to do this, but the key values are so screwed up
 				AddLadderKeys( entity );
@@ -2448,7 +2675,7 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 		Msg( "Instance Entity %d remapped to %d\n", i, num_entities + i );
 		Msg( "   FirstBrush: from %d to %d\n", Instance->entities[ i ].firstbrush, entity->firstbrush );
 		Msg( "   KV Pairs:\n" );
-		for ( epair_t *ep = entity->epairs; ep->next != NULL; ep = ep->next )
+		for ( epair_t *ep = entity->epairs; ep != NULL; ep = ep->next )
 		{
 			Msg( "      %s %s\n", ep->key, ep->value );
 		}
@@ -2470,7 +2697,7 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 
 		oldValue = Connection->m_Pair->value;
 		strcpy( origValue, oldValue );
-		char *pos = strchr( origValue, ',' );
+		char *pos = strchr( origValue, VMF_IOPARAM_STRING_DELIMITER );
 		if ( pos )
 		{	// null terminate the first field
 			*pos = NULL;
@@ -2483,20 +2710,75 @@ void CMapFile::MergeEntities( entity_t *pInstanceEntity, CMapFile *Instance, Vec
 			strcpy( newValue, temp );
 			if ( pos )
 			{
-				strcat( newValue, "," );
-				strcat( newValue, pos + 1 );
+				int nSize = strlen( newValue );
+				newValue[ nSize ] = VMF_IOPARAM_STRING_DELIMITER;
+				strcpy( &newValue[ nSize + 1 ], pos + 1 );
 			}
 
 			Connection->m_Pair->value = newValue;
 			delete oldValue;
 		}
+
+		// we need to look for operations that have target names as parameters
+		// ugly below:
+		oldValue = Connection->m_Pair->value;
+		strcpy( origValue, oldValue );
+		pos = strchr( origValue, VMF_IOPARAM_STRING_DELIMITER );
+		if ( pos )
+		{
+			pos++;
+			char *pos2 = strchr( pos, VMF_IOPARAM_STRING_DELIMITER );
+			if ( pos2 && strnicmp( pos, "setparent", pos2 - pos ) == 0 )
+			{
+				pos2++;
+				char *pos3 = strchr( pos2, VMF_IOPARAM_STRING_DELIMITER );
+
+				if ( pos3 )
+				{
+					char	szFixupValue[ 4096 ];
+
+					strncpy( szFixupValue, pos2, pos3 - pos2 );
+					szFixupValue[ pos3 - pos2 ] = 0;
+					if ( GD.RemapNameField( szFixupValue, temp, FixupStyle ) )
+					{
+						strcpy( szFixupValue, origValue );
+						strcpy( &szFixupValue[ pos2 - origValue ], temp );
+						strcat( szFixupValue, pos3 );
+
+						newValue = new char[ strlen( szFixupValue ) + 1 ];
+						strcpy( newValue, szFixupValue );
+						Connection->m_Pair->value = newValue;
+						delete oldValue;
+					}
+				}
+			}
+		}
 	}
 
 	num_entities += Instance->num_entities;
 
-	MoveBrushesToWorldGeneral( WorldspawnEnt );
-	WorldspawnEnt->numbrushes = 0;
-	WorldspawnEnt->epairs = NULL;
+	CConnectionPairs	*pLast = m_ConnectionPairs;
+	while( pLast != NULL && pLast->m_Next != NULL )
+	{
+		pLast = pLast->m_Next;
+	}
+
+	if ( pLast == NULL )
+	{
+		m_ConnectionPairs = Instance->m_ConnectionPairs;
+	}
+	else
+	{
+		pLast->m_Next = Instance->m_ConnectionPairs;
+	}
+
+	MoveBrushesToWorldGeneral( pWorldspawnEnt );
+	if ( IntForKey( pInstanceEntity, "toplevel" ) == 1 )
+	{
+		entities[ 0 ].epairs = pWorldspawnEnt->epairs;
+	}
+	pWorldspawnEnt->numbrushes = 0;
+	pWorldspawnEnt->epairs = NULL;
 }
 
 
@@ -2616,6 +2898,10 @@ bool LoadMapFile( const char *pszFileName )
 		OverlayTransition_UpdateSideLists( g_LoadingMap->m_StartMapWaterOverlays );
 
 		g_LoadingMap->CheckForInstances( pszFileName );
+		if (g_LoadingMap == g_MainMap)
+		{
+			g_LoadingMap->PostLoadInstances();
+		}
 
 		if ( pMainManifest )
 		{
@@ -3175,6 +3461,212 @@ void CMapFile::TestExpandBrushes (void)
 	fclose (f);
 
 	Error ("can't proceed after expanding brushes");
+}
+
+#define PROXY_ID "instance:"
+#define PROXY_RELAY "OnProxyRelay"
+
+// Instance merging
+void CMapFile::MergeIOProxy( entity_t *pInstanceEntity, CMapFile *Instance, Vector &InstanceOrigin, QAngle &InstanceAngle, matrix3x4_t &InstanceMatrix )
+{
+	char *pTargetName = ValueForKey( pInstanceEntity, "targetname" );
+
+	if ( pTargetName[ 0 ] == 0 )
+	{	// we can only do this for explicity named instances
+		return;
+	}
+
+	entity_t *io_proxy_entity = NULL;
+
+	// find the proxy entity
+	for( int i = 0; i < Instance->num_entities; i++ )
+	{
+		entity_t *entity = &entities[ num_entities - Instance->num_entities + i ];
+
+		char *pEntity = ValueForKey( entity, "classname" );
+		if ( strcmpi( pEntity, "func_instance_io_proxy" ) == 0 )
+		{
+			io_proxy_entity = entity;
+			break;
+		}
+	}
+
+	if ( io_proxy_entity == NULL )
+	{	// if we don't have a proxy, bail
+		return;
+	}
+
+	char *pProxyName = ValueForKey( io_proxy_entity, "targetname" );
+	GameData::TNameFixup FixupStyle = ( GameData::TNameFixup )( IntForKey( pInstanceEntity, "fixup_style" ) );
+	int nNumRelay = 0;
+
+	// rename existing proxy events to be uniquely numbered
+	for ( epair_t *ep = io_proxy_entity->epairs; ep != NULL; ep = ep->next )
+	{
+		if ( strcmpi( ep->key, PROXY_RELAY ) == 0 )
+		{
+			nNumRelay++;
+
+			char *pszOldKey = ep->key;
+			char temp[ MAX_KEYVALUE_LEN ];
+			sprintf( temp, "%s%d", pszOldKey, nNumRelay );
+
+			ep->key = new char[ strlen( temp ) + 1 ];
+			strcpy( ep->key, temp );
+			delete pszOldKey;
+		}
+	}
+
+	// examine all entity connections external to the instance, this is for IO going in to the instance
+	CConnectionPairs	*pConnection = m_ConnectionPairs;
+	while( pConnection != Instance->m_ConnectionPairs )
+	{
+		char	origValue[ MAX_KEYVALUE_LEN ];
+
+		strcpy( origValue, pConnection->m_Pair->value );
+		char *pos = strchr( origValue, VMF_IOPARAM_STRING_DELIMITER );
+		if ( pos != NULL )
+		{	// this is a proxy relay io
+			*pos = 0;
+
+			if ( strcmpi( origValue, pTargetName ) == 0 )
+			{	// which goes to the proxy relay inside the instance
+				char *pszProxy = pos + 1;
+
+				pos = strchr( pszProxy, VMF_IOPARAM_STRING_DELIMITER );
+				if ( pos != NULL )
+				{	// it is properly formatted
+					if ( strnicmp( pszProxy, PROXY_ID, strlen( PROXY_ID ) ) == 0 )
+					{	// the entity linkup is properly formatted   instance:xxxxxxx
+						pszProxy += strlen( PROXY_ID );
+
+						char test[ MAX_KEYVALUE_LEN ], search[ MAX_KEYVALUE_LEN ];
+						strcpy( test, pszProxy );
+						
+						char *Seperator = strchr( test, ';' );
+						*Seperator = NULL;
+
+						GD.RemapNameField( test, search, FixupStyle );
+
+						*Seperator = VMF_IOPARAM_STRING_DELIMITER;
+						char *NextSeperator = strchr( Seperator + 1, VMF_IOPARAM_STRING_DELIMITER );
+						*NextSeperator = 0;
+						strcat( search, Seperator );
+
+						// try and find the matchup entry in the proxy
+						for ( epair_t *ep = io_proxy_entity->epairs; ep != NULL; ep = ep->next )
+						{
+							if ( strnicmp( ep->key, PROXY_RELAY, strlen( PROXY_RELAY ) ) == 0 &&
+								 strnicmp( ep->value, search, strlen( search ) ) == 0 )
+							{	// the key is a relay and the value is identical
+								int len = sprintf( search, "%s%c%s%c%s", pProxyName, VMF_IOPARAM_STRING_DELIMITER, ep->key, VMF_IOPARAM_STRING_DELIMITER, NextSeperator + 1 );
+
+								char *pszOldKey = pConnection->m_Pair->value;
+
+								pConnection->m_Pair->value = new char[ len + 1 ];
+								strcpy( pConnection->m_Pair->value, search );
+								delete pszOldKey;
+
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		pConnection = pConnection->m_Next;
+	}
+
+	CUtlVector< epair_t * > RenameList, RemoveList;
+
+	// examine all entity connections external to the instance, this is for IO going out of the instance
+	pConnection = m_ConnectionPairs;
+	while( pConnection != Instance->m_ConnectionPairs )
+	{
+		// ugly way to find connections for the func_instance
+		for ( epair_t *ep = pInstanceEntity->epairs; ep != NULL; ep = ep->next )
+		{
+			if ( ep == pConnection->m_Pair )
+			{	// this connection is a member of our func_instance
+				char *pszProxy = ep->key;
+
+				if ( strnicmp( pszProxy, PROXY_ID, strlen( PROXY_ID ) ) == 0 )
+				{	// it is a proxy relay
+					pszProxy += strlen( PROXY_ID );
+
+					char test[ MAX_KEYVALUE_LEN ], search[ MAX_KEYVALUE_LEN ];
+					strcpy( test, pszProxy );
+
+					char *Seperator = strchr( test, ';' );
+					*Seperator = NULL;
+
+					GD.RemapNameField( test, search, FixupStyle );
+
+					char temp[ MAX_KEYVALUE_LEN ];
+
+					nNumRelay++;
+					sprintf( temp, "%s%d", PROXY_RELAY, nNumRelay );
+					// attach the new io to the proxy
+					SetKeyValue( io_proxy_entity, temp, ep->value ); 
+
+					// attempt to find the entity inside of the instance to hook this up to
+					for( int i = 0; i < Instance->num_entities; i++ )
+					{
+						entity_t *entity = &entities[ num_entities - Instance->num_entities + i ];
+
+						char *pszName = ValueForKey( entity, "targetname" );
+						if ( strcmpi( pszName, search ) == 0 )
+						{	// the target name matches, so this is the entity to hook up
+							for ( epair_t *epTarget = entity->epairs; epTarget != NULL; epTarget = epTarget->next )
+							{
+								if ( strcmpi( epTarget->key, Seperator + 1 ) != 0 )
+								{
+									continue;
+								}
+
+								char temp2[ MAX_KEYVALUE_LEN ];
+								strcpy( temp2, epTarget->value );
+
+								char *Pos1 = strchr( temp2, VMF_IOPARAM_STRING_DELIMITER );
+								if ( Pos1 != NULL )
+								{	// we found the key and it is formatted properly
+									*Pos1 = NULL;
+									Pos1 = strchr( Pos1 + 1, VMF_IOPARAM_STRING_DELIMITER );
+									if ( Pos1 != NULL )
+									{	// also continues to be formatted properly
+										char NewKey[ MAX_KEYVALUE_LEN ], NewValue[ MAX_KEYVALUE_LEN ];
+
+										sprintf( NewKey, "%s_NEW", Seperator + 1 );
+										sprintf( NewValue, "%s%c%s%s", temp2, VMF_IOPARAM_STRING_DELIMITER, temp, Pos1 );
+										// attach it to the new proxy
+										epair_t *pNewEP = SetKeyValue( entity, NewKey, NewValue, true );
+										RenameList.AddToHead( pNewEP );
+										RemoveList.AddToHead( epTarget );
+									}
+								}
+							}
+
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		pConnection = pConnection->m_Next;
+	}
+
+	for( int i = 0; i < RenameList.Count(); i++ )
+	{
+		RenameList[ i ]->key[ strlen( RenameList[ i ]->key ) - strlen( "_NEW" ) ] = 0;
+	}
+
+	for( int i = 0; i < RemoveList.Count(); i++ )
+	{
+		RemoveList[ i ]->key[ 0 ] = 0;
+		RemoveList[ i ]->value[ 0 ] = 0;
+	}
 }
 
 
